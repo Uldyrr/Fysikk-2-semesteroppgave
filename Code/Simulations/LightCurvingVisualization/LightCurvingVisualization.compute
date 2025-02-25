@@ -1,0 +1,77 @@
+#pragma kernel CSMain
+
+
+// Constants
+#define PHYSICS_AU 149597870700.0f                                 // m
+#define PHYSICS_C 299792458.0f                                     // m/s
+#define PHYSICS_G 6.67430E-11                                      // Nm^2/kg^2 | 6.67430(15)E-11
+
+#define SIMULATION_WIDTH 1920
+#define SIMULATION_HEIGHT 880
+#define SIMULATION_HALFWIDTH 960.0f
+#define SIMULATION_HALFHEIGHT 440.0f
+#define SIMULATION_PARTICLES 1024000
+#define SIMULATION_DELTATIME 0.002f                                // s
+#define SIMULATION_SCALE 0.0000000064172036373777076761561152354   // (Width * 0.5f) / AU
+
+#define SIMULATION_BLACKHOLE_MASS 1.988475E35                      // kg
+
+
+// Structs
+struct Photon
+{
+    float2 Position;
+    float2 Velocity;
+    float4 Color;
+};
+
+
+// Values
+RWTexture2D<float4> TargetTexture;
+
+// -- Simulation
+RWStructuredBuffer<Photon> Photons;
+static const float BlackholeSchwarzschildRadius = 2.0f * PHYSICS_G * SIMULATION_BLACKHOLE_MASS / (PHYSICS_C * PHYSICS_C);
+
+// -- Camera
+float CameraPositionX = 0.0f;
+float CameraPositionY = 0.0f;
+float CameraZoom = 1.0f;
+
+
+// Helper functions
+// Simulation functions
+float2 BlackholeGravityAcceleration(float2 pos)
+{
+    return normalize(-pos) * PHYSICS_G * SIMULATION_BLACKHOLE_MASS / (length(pos) * length(pos));
+}
+
+
+void SimulatePhoton(uint i)
+{
+    if (length(Photons[i].Position) < BlackholeSchwarzschildRadius)  // Physics update: Particle trapped!
+        return;
+    
+    // Physics update: Euler method velocity and position updates
+    Photons[i].Velocity = Photons[i].Velocity + BlackholeGravityAcceleration(Photons[i].Position) * SIMULATION_DELTATIME;
+    Photons[i].Position += Photons[i].Velocity * SIMULATION_DELTATIME;
+}
+
+
+void RenderPhoton(uint i)  // 2D xy rendering
+{
+    float2 photonScreenPosition = Photons[i].Position.xy * CameraZoom * SIMULATION_SCALE + float2(CameraPositionX, CameraPositionY) * CameraZoom + float2(SIMULATION_HALFWIDTH, SIMULATION_HALFHEIGHT);
+    
+    if (photonScreenPosition.x < 0.0f || photonScreenPosition.y < 0.0f || photonScreenPosition.x >= SIMULATION_WIDTH || photonScreenPosition.y >= SIMULATION_HEIGHT)
+        return;
+    
+    TargetTexture[uint2((uint)photonScreenPosition.x, (uint)photonScreenPosition.y)] = Photons[i].Color;
+}
+
+
+[numthreads(1024, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    SimulatePhoton(id.x);
+    RenderPhoton(id.x);
+}
