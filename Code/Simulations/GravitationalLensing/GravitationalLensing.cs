@@ -141,13 +141,13 @@ namespace GravitationalLensing
             m_cameraBuffer.SetData(new Camera[] { m_camera });
 
             // -- Blackholes
-            m_simulationBlackholes[0] = new Blackhole(new Vector3(0.0f, 0.0f, -PHYSICS_AU * 0.005f), 2E32f);
+            m_simulationBlackholes[0] = new Blackhole(new Vector3(0.0f, 0.0f, -PHYSICS_AU * 0.001f), 2E31F);
 
             m_blackholesBuffer = new ComputeBuffer(m_simulationBlackholes.Length, Blackhole.SizeOf);
             m_blackholesBuffer.SetData(m_simulationBlackholes);
 
             // -- CelestialObject
-            m_simulationCelestialObject = new CelestialObject(new Vector3(0.0f, 0.0f, -PHYSICS_AU * 0.05f), 6.371E6f);
+            m_simulationCelestialObject = new CelestialObject(new Vector3(0.0f, 0.0f, -PHYSICS_AU * 0.01f), 6371000.8f);
 
             m_celestialObjectBuffer = new ComputeBuffer(1, CelestialObject.SizeOf);
             m_celestialObjectBuffer.SetData(new CelestialObject[] { m_simulationCelestialObject });
