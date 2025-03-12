@@ -10,11 +10,12 @@
 #define SIMULATION_HALFWIDTH 960.0f
 #define SIMULATION_HALFHEIGHT 440.0f
 #define SIMULATION_DELTATIME 0.01f
-#define SIMULATION_MAXPHOTONSTEPS 10000
+#define SIMULATION_MAXPHOTONSTEPS 2000
 
 #define SIMULATION_COUNT_BLACKHOLES 1
 
 #define FLT_MAX 3.402823466e+38F
+#define FLT_MIN 1.175494E-38f
 
 
 // Structs
@@ -36,6 +37,7 @@ struct Photon
     float3 Position;
     float3 Velocity;
     float RedshiftFactor;
+    float BlueshiftFactor;
     float4 Color;
 };
 
@@ -54,7 +56,6 @@ RWTexture2D<float4> SkyboxTexture;
 RWTexture2D<float4> CelestialObjectTexture;
 
 // -- Simulation
-static float SimulationBoundsRadius = PHYSICS_AU * 0.02f;    // Note: The simulation's origo is at (0, 0, 0) which is where the camera is
 RWStructuredBuffer<Camera> SimulationCamera;
 RWStructuredBuffer<CelestialObject> SimulationCelestialObject;
 RWStructuredBuffer<Blackhole> SimulationBlackholes;
@@ -124,6 +125,8 @@ float4 Wavelength2RGBA(float wavelength, float4 originalColor)
 {
     float Gamma = 0.80f, factor, red, green, blue;
     
+    wavelength = clamp(wavelength, 380.0f, 781.0f);
+    
     if ((wavelength >= 380.0f) && (wavelength < 440.0f))
     {
         red = -(wavelength - 440.0f) / (440.0f - 380.0f);
@@ -160,12 +163,6 @@ float4 Wavelength2RGBA(float wavelength, float4 originalColor)
         green = 0.0f;
         blue = 0.0f;
     }
-    else
-    {
-        red = 0.0f;
-        green = 0.0f;
-        blue = 0.0f;
-    };
     
     // Let the intensity fall off near the vision limits
     if ((wavelength >= 380.0f) && (wavelength < 420.0f))
@@ -176,14 +173,10 @@ float4 Wavelength2RGBA(float wavelength, float4 originalColor)
     {
         factor = 1.0f;
     }
-    else if ((wavelength >= 701.0f) && (wavelength < 781.0f))
+    else if ((wavelength >= 701.0f) && (wavelength <= 781.0f))
     {
         factor = 0.3f + 0.7f * (780.0f - wavelength) / (780.0f - 700.0f);
     }
-    else
-    {
-        factor = 0.0f;
-    };
     
     float3 originalColorHSV = RGBA2HSV(originalColor);
     float3 wavelengthColorHSV = RGBA2HSV(float4(pow(red * factor, Gamma), pow(green * factor, Gamma), pow(blue * factor, Gamma), 1.0f));
@@ -226,6 +219,13 @@ float GravitationalEscapeVelocity(float3 positionA, float3 positionB, float mass
 float LorentzFactor(float velocity)
 {
     return 1.0f / sqrt(1.0f - (velocity * velocity) / (PHYSICS_C * PHYSICS_C));
+}
+
+
+float GravitationalPotential(float3 positionA, float3 positionB, float massB)  // Source: https://en.wikipedia.org/wiki/Gravitational_potential
+{
+    return -(PHYSICS_G * massB) / length(positionB - positionA);
+
 }
 
 
@@ -300,7 +300,8 @@ Photon CreatePhoton(float3 position, float3 velocity)
     Photon photon;
     photon.Position = position;
     photon.Velocity = velocity;
-    photon.RedshiftFactor = 1.0f;
+    photon.RedshiftFactor = 0.0f;
+    photon.BlueshiftFactor = 1.0f;
     photon.Color = float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     return photon;
@@ -322,13 +323,21 @@ float3 PhotonCalculateAcceleration(Photon photon)
 }
 
 
-void PhotonUpdateRedshift(inout Photon photon)
+void PhotonUpdateShift(inout Photon photon)
 {
+    float sumOfGravitationalPotential = 0.0f;
+    float sumOfCameraGravitationalPotential = 0.0f;
+    
     [unroll]
     for (int i = 0; i < SIMULATION_COUNT_BLACKHOLES; i++)
     {
-        photon.RedshiftFactor = max(LorentzFactor(GravitationalEscapeVelocity(photon.Position, SimulationBlackholes[i].Position, SimulationBlackholes[i].Mass)), photon.RedshiftFactor);
+        sumOfGravitationalPotential += GravitationalPotential(photon.Position, SimulationBlackholes[i].Position, SimulationBlackholes[i].Mass);
+        sumOfCameraGravitationalPotential += GravitationalPotential(float3(0.0f, 0.0f, 0.0f), SimulationBlackholes[i].Position, SimulationBlackholes[i].Mass);
+        
+        photon.BlueshiftFactor = max(LorentzFactor(GravitationalEscapeVelocity(photon.Position, SimulationBlackholes[i].Position, SimulationBlackholes[i].Mass)), photon.BlueshiftFactor);
     }
+           
+    photon.RedshiftFactor = max((sumOfCameraGravitationalPotential - sumOfGravitationalPotential) / (PHYSICS_C * PHYSICS_C), photon.RedshiftFactor);
 }
 
 
@@ -405,17 +414,17 @@ float4 CameraGetSimulatedPixelColor(uint2 pixelPosition)
         
         photon.Position += photon.Velocity * SIMULATION_DELTATIME;
         
-        PhotonUpdateRedshift(photon);
+        PhotonUpdateShift(photon);
         
-        // Update: Out of bounds (check first celestial object collision, then skybox texture intersection)
+        // Update: Max iterations (check skybox texture intersection)
         if (i == SIMULATION_MAXPHOTONSTEPS) photon.Color = GetSkyboxTexturePixelColor(photon.Velocity);
     }
     
     float3 hsv = RGBA2HSV(photon.Color);
-    float wavelength = Hue2Wavelength(hsv.x) * photon.RedshiftFactor;
+    float wavelength = Hue2Wavelength(hsv.x) * (1.0f + photon.RedshiftFactor) / photon.BlueshiftFactor;
     float4 wavelengthRGBA = Wavelength2RGBA(wavelength, photon.Color);
     
-    return photon.Color;
+    return wavelengthRGBA;
 }
 
 
